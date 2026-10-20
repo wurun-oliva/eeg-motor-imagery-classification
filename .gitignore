@@ -1,1 +1,27 @@
+# EEG dataset and archives
 data/
+data.zip
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS system files
+.DS_Store
+
+# Generated figures
+confusion_matrix.png
+Figure_1.png
+
+# Trained models
+models/
+
+# Personal documents
+*.pdf
+*.docx
+
+# Generated experiment figures
+experiments/confusion_matrix.png
+experiments/.DS_Store
