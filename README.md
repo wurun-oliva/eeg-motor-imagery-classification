@@ -37,7 +37,6 @@ CSP maximizes the variance of one class while minimizing it for others, making i
 | More subjects coming... | |
 
 - **Random baseline**: 25% (4-class)
-- **Training accuracy**: 80.2%
 - **Confusion matrix**: See `confusion_matrix.png`
 
 ## Installation
