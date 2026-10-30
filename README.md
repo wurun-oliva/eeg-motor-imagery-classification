@@ -33,7 +33,7 @@ CSP maximizes the variance of one class while minimizing it for others, making i
 
 | Subject | Accuracy (5-fold CV) |
 |---------|---------------------|
-| A01     | 76.39% ± 5.19%      |
+| A01     | 75.69% ± 5.57%      |
 | More subjects coming... | |
 
 - **Random baseline**: 25% (4-class)
