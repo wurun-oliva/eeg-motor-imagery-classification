@@ -1,0 +1,420 @@
+
+from pathlib import Path
+import json
+import joblib
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import mne
+
+from mne.decoding import CSP
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import cross_val_score, cross_val_predict
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    f1_score
+)
+
+# ==================== 路径与参数 ====================
+
+ROOT = Path(__file__).resolve().parent
+DATA_PATH = ROOT / "data" / "A01T.gdf"
+OUTPUT_DIR = ROOT / "outputs"
+MODEL_PATH = ROOT / "csp_lda_model.joblib"
+
+EVENT_CODES = {
+    "769": 0,
+    "770": 1,
+    "771": 2,
+    "772": 3
+}
+
+CLASS_NAMES = {
+    0: "left_hand",
+    1: "right_hand",
+    2: "feet",
+    3: "tongue"
+}
+
+EOG_CHANNELS = {
+    "EOG-left": "eog",
+    "EOG-central": "eog",
+    "EOG-right": "eog"
+}
+
+L_FREQ = 8.0
+H_FREQ = 30.0
+TMIN = 0.5
+TMAX = 3.5
+N_SPLITS = 5
+
+
+# ==================== 读取和预处理数据 ====================
+
+def load_training_data():
+
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(
+            f"找不到训练文件：{DATA_PATH}\n"
+            "请将 A01T.gdf 放入 data 文件夹。"
+        )
+
+    raw = mne.io.read_raw_gdf(
+        DATA_PATH,
+        preload=True,
+        verbose="ERROR"
+    )
+
+    # 标记眼电通道
+    channel_types = {
+        ch: typ
+        for ch, typ in EOG_CHANNELS.items()
+        if ch in raw.ch_names
+    }
+
+    if channel_types:
+        raw.set_channel_types(
+            channel_types,
+            verbose="ERROR"
+        )
+
+    # 8–30 Hz 带通滤波
+    raw.filter(
+        l_freq=L_FREQ,
+        h_freq=H_FREQ,
+        method="iir",
+        verbose="ERROR"
+    )
+
+    # 提取指定事件
+    event_id = {
+        code: int(code)
+        for code in EVENT_CODES
+    }
+
+    events, _ = mne.events_from_annotations(
+        raw,
+        event_id=event_id,
+        verbose="ERROR"
+    )
+
+    found_ids = set(events[:, 2].tolist())
+    missing_ids = set(event_id.values()) - found_ids
+
+    if missing_ids:
+        raise RuntimeError(
+            f"没有找到预期事件码：{sorted(missing_ids)}"
+        )
+
+    # 按提示事件截取试次
+    epochs = mne.Epochs(
+        raw,
+        events,
+        event_id=event_id,
+        tmin=TMIN,
+        tmax=TMAX,
+        baseline=None,
+        preload=True,
+        event_repeated="merge",
+        verbose="ERROR"
+    )
+
+    # 只使用 EEG 通道
+    epochs = epochs.copy().pick("eeg")
+
+    X = epochs.get_data()
+
+    # 将原始事件码映射为 0、1、2、3
+    y = np.array([
+        EVENT_CODES[str(code)]
+        for code in epochs.events[:, -1]
+    ], dtype=int)
+
+    channel_names = list(epochs.ch_names)
+    sampling_rate = float(raw.info["sfreq"])
+
+    return X, y, channel_names, sampling_rate
+
+
+# ==================== 主程序 ====================
+
+def main():
+
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    print("===== 程序 A：模型训练与评估 =====")
+
+    X, y, channel_names, sampling_rate = load_training_data()
+
+    print(f"试次数：{len(y)}")
+    print(f"EEG 通道数：{len(channel_names)}")
+    print(f"采样率：{sampling_rate:g} Hz")
+
+    print(
+        "类别数量：",
+        {
+            CLASS_NAMES[k]: int(np.sum(y == k))
+            for k in CLASS_NAMES
+        }
+    )
+
+    # CSP + LDA 分类流程
+    pipeline = Pipeline([
+        (
+            "csp",
+            CSP(
+                n_components=4,
+                reg=None,
+                log=True,
+                cov_est="concat"
+            )
+        ),
+        (
+            "lda",
+            LinearDiscriminantAnalysis()
+        )
+    ])
+
+    # ---------- 第一部分：五折交叉验证 ----------
+
+    scores = cross_val_score(
+        pipeline,
+        X,
+        y,
+        cv=N_SPLITS,
+        scoring="accuracy"
+    )
+
+    # 每个试次由未用该试次训练的折模型进行预测
+    y_pred = cross_val_predict(
+        pipeline,
+        X,
+        y,
+        cv=N_SPLITS
+    )
+
+    accuracy = accuracy_score(y, y_pred)
+
+    macro_f1 = f1_score(
+        y,
+        y_pred,
+        average="macro"
+    )
+
+    print("\n===== 五折交叉验证结果 =====")
+
+    for fold, score in enumerate(scores, start=1):
+        print(f"第 {fold} 折准确率：{score:.2%}")
+
+    print(f"平均准确率：{scores.mean():.2%}")
+    print(f"准确率标准差：{scores.std():.2%}")
+    print(f"合并折外预测准确率：{accuracy:.2%}")
+    print(f"Macro-F1：{macro_f1:.4f}")
+
+    # ---------- 第二部分：分类报告 ----------
+
+    report = classification_report(
+        y,
+        y_pred,
+        labels=[0, 1, 2, 3],
+        target_names=[
+            CLASS_NAMES[i]
+            for i in range(4)
+        ],
+        zero_division=0
+    )
+
+    print("\n===== 分类报告 =====")
+    print(report)
+
+    (
+        OUTPUT_DIR / "classification_report.txt"
+    ).write_text(
+        report,
+        encoding="utf-8"
+    )
+
+    report_dict = classification_report(
+        y,
+        y_pred,
+        labels=[0, 1, 2, 3],
+        target_names=[
+            CLASS_NAMES[i]
+            for i in range(4)
+        ],
+        output_dict=True,
+        zero_division=0
+    )
+
+    pd.DataFrame(
+        report_dict
+    ).transpose().to_csv(
+        OUTPUT_DIR / "classification_report.csv"
+    )
+
+    # ---------- 第三部分：混淆矩阵 ----------
+
+    cm = confusion_matrix(
+        y,
+        y_pred,
+        labels=[0, 1, 2, 3]
+    )
+
+    pd.DataFrame(
+        cm,
+        index=[CLASS_NAMES[i] for i in range(4)],
+        columns=[CLASS_NAMES[i] for i in range(4)]
+    ).to_csv(
+        OUTPUT_DIR / "confusion_matrix.csv"
+    )
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    ConfusionMatrixDisplay(
+        confusion_matrix=cm,
+        display_labels=[
+            CLASS_NAMES[i]
+            for i in range(4)
+        ]
+    ).plot(
+        ax=ax,
+        cmap="Blues",
+        values_format="d",
+        colorbar=False
+    )
+
+    ax.set_title(
+        "CSP + LDA: 5-fold Confusion Matrix"
+    )
+
+    fig.tight_layout()
+
+    fig.savefig(
+        OUTPUT_DIR / "confusion_matrix.png",
+        dpi=180
+    )
+
+    plt.close(fig)
+
+    # ---------- 第四部分：五折准确率图 ----------
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    ax.bar(
+        range(1, len(scores) + 1),
+        scores * 100
+    )
+
+    ax.axhline(
+        scores.mean() * 100,
+        linestyle="--",
+        label=f"Mean = {scores.mean() * 100:.2f}%"
+    )
+
+    ax.set_xticks(range(1, len(scores) + 1))
+    ax.set_xlabel("Fold")
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title("Five-fold Cross-validation Accuracy")
+    ax.legend()
+
+    fig.tight_layout()
+
+    fig.savefig(
+        OUTPUT_DIR / "five_fold_accuracy.png",
+        dpi=180
+    )
+
+    plt.close(fig)
+
+    # ---------- 第五部分：保存逐试次折外预测 ----------
+
+    predictions = pd.DataFrame({
+        "trial": np.arange(1, len(y) + 1),
+        "true_class": [
+            CLASS_NAMES[int(v)]
+            for v in y
+        ],
+        "cv_predicted_class": [
+            CLASS_NAMES[int(v)]
+            for v in y_pred
+        ],
+        "correct": y == y_pred
+    })
+
+    predictions.to_csv(
+        OUTPUT_DIR / "cross_validation_predictions.csv",
+        index=False
+    )
+
+    # ---------- 第六部分：保存评估摘要 ----------
+
+    summary = {
+        "training_file": DATA_PATH.name,
+        "n_trials": int(len(y)),
+        "n_eeg_channels": len(channel_names),
+        "sampling_rate_hz": sampling_rate,
+        "fold_accuracies": [
+            float(s)
+            for s in scores
+        ],
+        "mean_cv_accuracy": float(scores.mean()),
+        "std_cv_accuracy": float(scores.std()),
+        "pooled_oof_accuracy": float(accuracy),
+        "macro_f1": float(macro_f1)
+    }
+
+    with open(
+        OUTPUT_DIR / "summary.json",
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            summary,
+            f,
+            indent=2,
+            ensure_ascii=False
+        )
+
+    # ---------- 第七部分：训练并保存最终模型 ----------
+
+    # 注意：这里重新使用全部训练试次拟合模型。
+    # 该模型供程序 B 预测独立的新数据使用。
+    pipeline.fit(X, y)
+
+    model_bundle = {
+        "model": pipeline,
+        "channel_names": channel_names,
+        "sfreq": sampling_rate,
+        "l_freq": L_FREQ,
+        "h_freq": H_FREQ,
+        "tmin": TMIN,
+        "tmax": TMAX,
+        "class_names": CLASS_NAMES,
+        "training_file": DATA_PATH.name
+    }
+
+    joblib.dump(
+        model_bundle,
+        MODEL_PATH
+    )
+
+    print("\n===== 完成 =====")
+    print(f"最终模型已保存：{MODEL_PATH}")
+    print(f"评估结果已保存：{OUTPUT_DIR}")
+
+    print(
+        "\n提示：五折交叉验证结果用于评估模型。"
+        "保存的最终模型使用全部 A01T 训练数据拟合，"
+        "应当用于独立数据，而不是用训练集预测结果证明模型准确。"
+    )
+
+
+if __name__ == "__main__":
+    main()

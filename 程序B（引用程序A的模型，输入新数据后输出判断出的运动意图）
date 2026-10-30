@@ -1,0 +1,244 @@
+
+from pathlib import Path
+import argparse
+import joblib
+import numpy as np
+import pandas as pd
+import mne
+
+ROOT = Path(__file__).resolve().parent
+MODEL_PATH = ROOT / "csp_lda_model.joblib"
+DEFAULT_INPUT = ROOT / "data" / "A01E.gdf"
+OUTPUT_DIR = ROOT / "outputs"
+
+# 标准 BCI Competition IV 2a 评估文件常见的提示标记
+TEST_EVENT_CODE = "783"
+
+EOG_CHANNELS = {
+    "EOG-left": "eog",
+    "EOG-central": "eog",
+    "EOG-right": "eog"
+}
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description="对独立 EEG GDF 文件进行运动想象分类预测"
+    )
+
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=DEFAULT_INPUT,
+        help="输入 GDF 文件，默认 data/A01E.gdf"
+    )
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="可选：指定预测结果 CSV 的保存位置"
+    )
+
+    args = parser.parse_args()
+
+    # ---------- 检查文件 ----------
+
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            "找不到已训练模型。请先运行：python main.py"
+        )
+
+    if not args.input.exists():
+        raise FileNotFoundError(
+            f"找不到输入文件：{args.input}\n"
+            "请将 A01E.gdf 放进 data 文件夹，"
+            "或使用 --input 指定文件路径。"
+        )
+
+    # ---------- 加载模型 ----------
+
+    bundle = joblib.load(MODEL_PATH)
+
+    model = bundle["model"]
+    required_channels = bundle["channel_names"]
+    expected_sfreq = float(bundle["sfreq"])
+
+    class_names = {
+        int(k): v
+        for k, v in bundle["class_names"].items()
+    }
+
+    print("===== 程序 B：新数据运动想象预测 =====")
+    print(f"输入文件：{args.input}")
+
+    # ---------- 读取 EEG 数据 ----------
+
+    raw = mne.io.read_raw_gdf(
+        args.input,
+        preload=True,
+        verbose="ERROR"
+    )
+
+    channel_types = {
+        ch: typ
+        for ch, typ in EOG_CHANNELS.items()
+        if ch in raw.ch_names
+    }
+
+    if channel_types:
+        raw.set_channel_types(
+            channel_types,
+            verbose="ERROR"
+        )
+
+    # 检查采样率是否一致
+    actual_sfreq = float(raw.info["sfreq"])
+
+    if not np.isclose(
+        actual_sfreq,
+        expected_sfreq
+    ):
+        raise ValueError(
+            f"采样率不一致：训练数据为 {expected_sfreq:g} Hz，"
+            f"新数据为 {actual_sfreq:g} Hz。"
+        )
+
+    # 检查 EEG 通道是否完整
+    missing_channels = [
+        ch
+        for ch in required_channels
+        if ch not in raw.ch_names
+    ]
+
+    if missing_channels:
+        raise ValueError(
+            f"新数据缺少模型需要的 EEG 通道：{missing_channels}"
+        )
+
+    # ---------- 预处理 ----------
+
+    raw.filter(
+        l_freq=bundle["l_freq"],
+        h_freq=bundle["h_freq"],
+        method="iir",
+        verbose="ERROR"
+    )
+
+    # ---------- 提取新数据中的试次 ----------
+
+    event_id = {
+        TEST_EVENT_CODE: int(TEST_EVENT_CODE)
+    }
+
+    events, _ = mne.events_from_annotations(
+        raw,
+        event_id=event_id,
+        verbose="ERROR"
+    )
+
+    if len(events) == 0:
+        descriptions = sorted(
+            set(raw.annotations.description.astype(str))
+        )
+
+        numeric_codes = [
+            item
+            for item in descriptions
+            if item.isdigit()
+        ]
+
+        raise RuntimeError(
+            f"没有找到事件码 {TEST_EVENT_CODE}。\n"
+            f"当前数字事件标记：{numeric_codes}\n"
+            "请确认 A01E.gdf 的数据集格式与事件标记。"
+        )
+
+    epochs = mne.Epochs(
+        raw,
+        events,
+        event_id=event_id,
+        tmin=bundle["tmin"],
+        tmax=bundle["tmax"],
+        baseline=None,
+        preload=True,
+        event_repeated="merge",
+        verbose="ERROR"
+    )
+
+    # 通道顺序必须与训练时一致
+    epochs = epochs.copy().pick(
+        required_channels
+    )
+
+    X_new = epochs.get_data()
+
+    if len(X_new) == 0:
+        raise RuntimeError(
+            "没有提取到可预测的试次，请检查事件标记和时间窗口。"
+        )
+
+    # ---------- 预测运动想象类别 ----------
+
+    y_pred = model.predict(X_new)
+
+    result = pd.DataFrame({
+        "trial": np.arange(1, len(y_pred) + 1),
+        "predicted_class_id": y_pred.astype(int),
+        "predicted_motor_imagery": [
+            class_names[int(value)]
+            for value in y_pred
+        ]
+    })
+
+    # ---------- 保存结果 ----------
+
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    output_path = (
+        args.output
+        if args.output is not None
+        else OUTPUT_DIR / f"predictions_{args.input.stem}.csv"
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    result.to_csv(
+        output_path,
+        index=False
+    )
+
+    print(f"\n提取试次数：{len(y_pred)}")
+
+    print("\n各类别预测数量：")
+
+    print(
+        result["predicted_motor_imagery"]
+        .value_counts()
+        .reindex(
+            [class_names[i] for i in range(4)],
+            fill_value=0
+        )
+        .to_string()
+    )
+
+    print("\n前 20 个试次的预测结果：")
+    print(result.head(20).to_string(index=False))
+
+    print(f"\n预测结果已保存：{output_path}")
+
+    print(
+        "\n注意：这些是模型预测结果，不是已确认的真实标签。"
+        "如果新数据没有真实标签，就不能仅凭预测结果计算测试准确率。"
+    )
+
+
+if __name__ == "__main__":
+    main()
