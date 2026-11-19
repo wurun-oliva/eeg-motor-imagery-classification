@@ -98,3 +98,16 @@ bci_project/
 - [ ] Compare with PSD + SVM baseline
 - [ ] Implement EEGNet (PyTorch) for deep learning comparison
 - [ ] Subject-independent model training
+# Causal sliding-window replay (吴润)
+
+The original automatic sliding-window replay is preserved in `sliding_window.py`, `realtime_simulation.py`, and `realtime_model_integration.py`. A package-based causal replay entry point is also available at `src/realtime/stream_replay.py`.
+
+It feeds a saved GDF recording in chronological chunks, carries the SOS filter state across chunks, and predicts only after each 751-sample window has arrived. Defaults are 3 s windows and 0.25 s steps after each cue. This is replay simulation from recorded data, not live headset input.
+
+From the repository root, after placing `A01T.gdf` under `data/` and the deployment model at the root:
+
+```bash
+python -m src.realtime.stream_replay --gdf data/A01T.gdf --model bci2a_csp_lda_n6_all9.joblib
+```
+
+Add `--realtime` to pace playback at the recording sample rate. Results are written to `outputs/realtime/sliding_predictions.csv`. The deployment model includes A01 in its training data, so A01 replay label agreement is for demonstration and is not held-out performance.
