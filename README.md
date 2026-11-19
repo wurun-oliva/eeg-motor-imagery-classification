@@ -111,3 +111,13 @@ python -m src.realtime.stream_replay --gdf data/A01T.gdf --model bci2a_csp_lda_n
 ```
 
 Add `--realtime` to pace playback at the recording sample rate. Results are written to `outputs/realtime/sliding_predictions.csv`. The deployment model includes A01 in its training data, so A01 replay label agreement is for demonstration and is not held-out performance.
+
+## Interactive manual window (吴润)
+
+To move a fixed 3 s window by hand, launch:
+
+```bash
+python -m src.realtime.interactive_window --gdf data/A01T.gdf --model bci2a_csp_lda_n6_all9.joblib
+```
+
+Drag the slider to choose the window start time and press **预测**. The viewer plots all 22 channels for that window and shows the predicted class and class probabilities. Each manual prediction is appended to `outputs/realtime/manual_predictions.csv`. The model requires exactly 751 samples; the slider moves the window position but does not resize it. This interactive viewer is for offline inspection and is separate from the automatic replay command above.
