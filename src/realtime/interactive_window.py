@@ -24,7 +24,7 @@ CHANNELS = [
     "EEG-C3", "EEG-6", "EEG-Cz", "EEG-7", "EEG-C4", "EEG-8", "EEG-9",
     "EEG-10", "EEG-11", "EEG-12", "EEG-13", "EEG-14", "EEG-Pz", "EEG-15", "EEG-16",
 ]
-LABELS = {0: "左手", 1: "右手", 2: "双脚", 3: "舌头"}
+LABELS = {0: "Left hand", 1: "Right hand", 2: "Feet", 3: "Tongue"}
 WINDOW_SAMPLES = 751
 
 
@@ -76,18 +76,18 @@ def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
     ]
     ax.set_yticks(offsets)
     ax.set_yticklabels(CHANNELS, fontsize=8)
-    ax.set_xlabel("窗口内时间（秒）")
-    ax.set_title("手动 EEG 窗口查看器（固定 3 秒 / 751 点）")
+    ax.set_xlabel("Time within window (seconds)")
+    ax.set_title("Manual EEG Window Viewer (fixed 3 s / 751 samples)")
     ax.grid(axis="x", alpha=0.25)
-    status = fig.text(0.12, 0.12, "拖动下方滑块选择窗口，再点击“预测”", fontsize=11)
+    status = fig.text(0.12, 0.12, "Drag the slider to choose a window, then click Predict.", fontsize=11)
 
     slider_ax = fig.add_axes([0.14, 0.065, 0.66, 0.035])
     slider = Slider(
-        slider_ax, "窗口起点（秒）", 0.0, max_start / FS,
+        slider_ax, "Window start (s)", 0.0, max_start / FS,
         valinit=0.0, valstep=1.0 / FS, valfmt="%.2f",
     )
     button_ax = fig.add_axes([0.83, 0.045, 0.12, 0.075])
-    predict_button = Button(button_ax, "预测")
+    predict_button = Button(button_ax, "Predict")
 
     state = {"start": 0}
 
@@ -98,7 +98,7 @@ def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
         for i, line in enumerate(lines):
             line.set_ydata(segment[i] * 1e6 + offsets[i])
         status.set_text(
-            f"当前窗口：{start / FS:.2f}–{(start + WINDOW_SAMPLES - 1) / FS:.2f} 秒；尚未预测"
+            f"Window: {start / FS:.2f}–{(start + WINDOW_SAMPLES - 1) / FS:.2f} s | Not predicted yet"
         )
         fig.canvas.draw_idle()
 
@@ -108,8 +108,8 @@ def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
         pred = int(model.predict(batch)[0])
         probs = model.predict_proba(batch)[0]
         status.set_text(
-            f"预测：{LABELS[pred]}  |  左手 {probs[0]:.1%}  右手 {probs[1]:.1%}  "
-            f"双脚 {probs[2]:.1%}  舌头 {probs[3]:.1%}"
+            f"Prediction: {LABELS[pred]}  |  Left {probs[0]:.1%}  Right {probs[1]:.1%}  "
+            f"Feet {probs[2]:.1%}  Tongue {probs[3]:.1%}"
         )
         append_result(output_csv, start, pred, probs)
         fig.canvas.draw_idle()
