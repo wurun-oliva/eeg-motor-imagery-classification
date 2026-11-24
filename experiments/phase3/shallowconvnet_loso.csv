@@ -1,0 +1,10 @@
+﻿test_subject,n_test_trials,accuracy,macro_f1,cohen_kappa,model,epochs_run,normalization,protocol
+A01,288,0.59375,0.5777634913536076,0.45833333333333337,ShallowConvNet; Adam; validation early stopping,60,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A02,288,0.2986111111111111,0.2424278337951145,0.06481481481481477,ShallowConvNet; Adam; validation early stopping,60,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A03,288,0.5069444444444444,0.4317839282412484,0.34259259259259256,ShallowConvNet; Adam; validation early stopping,44,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A04,288,0.3194444444444444,0.24631220711257024,0.09259259259259256,ShallowConvNet; Adam; validation early stopping,40,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A05,288,0.2673611111111111,0.14318231136104456,0.02314814814814814,ShallowConvNet; Adam; validation early stopping,51,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A06,288,0.2847222222222222,0.26534032950643227,0.04629629629629628,ShallowConvNet; Adam; validation early stopping,35,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A07,288,0.3194444444444444,0.318636181862926,0.09259259259259256,ShallowConvNet; Adam; validation early stopping,60,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A08,288,0.5,0.4779075386927799,0.33333333333333337,ShallowConvNet; Adam; validation early stopping,33,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz
+A09,288,0.5104166666666666,0.4939797307804893,0.3472222222222222,ShallowConvNet; Adam; validation early stopping,37,per-channel z-score; fit subjects only,LOSO; T session; 22 channels; 8-30 Hz; cue+0.5 to +3.5 s; 125 Hz

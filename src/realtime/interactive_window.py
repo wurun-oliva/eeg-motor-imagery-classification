@@ -40,7 +40,41 @@ def load_causal_eeg(gdf_path: Path) -> np.ndarray:
     return filtered.astype(np.float32, copy=False)
 
 
-def append_result(path: Path, start_sample: int, predicted: int, probabilities):
+def load_labeled_trials(gdf_path: Path):
+    """Return cue-aligned labels and each trial's next onset boundary."""
+    raw = mne.io.read_raw_gdf(gdf_path, preload=False, verbose="ERROR")
+    events, event_id = mne.events_from_annotations(raw, verbose="ERROR")
+    id_to_code = {v: str(k).strip() for k, v in event_id.items()}
+    starts = []
+    cues = []
+    for sample, _, code in events:
+        description = id_to_code.get(int(code), "")
+        sample = int(sample - raw.first_samp)
+        if description == "768":
+            starts.append(sample)
+        elif description in {"769", "770", "771", "772"}:
+            cues.append((sample, int(description) - 769))
+    starts.sort()
+    cues.sort()
+    trials = []
+    for i, (onset, next_onset) in enumerate(zip(starts, starts[1:] + [raw.n_times])):
+        cue = next((item for item in cues if onset <= item[0] < next_onset), None)
+        if cue is not None:
+            trials.append((cue[0], next_onset, cue[1]))
+    return trials
+
+
+def true_label_for_window(start_sample: int, trials):
+    """Only score a full window inside the cue's four-second imagery period."""
+    stop_sample = start_sample + WINDOW_SAMPLES
+    for cue_sample, next_onset, label in trials:
+        imagery_stop = min(next_onset, cue_sample + int(round(4.0 * FS)) + 1)
+        if start_sample >= cue_sample + int(round(0.5 * FS)) and stop_sample <= imagery_stop:
+            return label
+    return None
+
+
+def append_result(path: Path, start_sample: int, predicted: int, true_label, probabilities):
     path.parent.mkdir(parents=True, exist_ok=True)
     exists = path.exists()
     with path.open("a", newline="", encoding="utf-8-sig") as f:
@@ -49,18 +83,24 @@ def append_result(path: Path, start_sample: int, predicted: int, probabilities):
             writer.writerow([
                 "timestamp", "window_start_sample", "window_end_sample_exclusive",
                 "window_start_s", "window_end_s", "predicted_label", "predicted_class",
+                "true_label", "true_class", "correct",
                 "p_left", "p_right", "p_feet", "p_tongue",
             ])
         writer.writerow([
             datetime.now().isoformat(timespec="seconds"), start_sample,
             start_sample + WINDOW_SAMPLES,
             f"{start_sample / FS:.3f}", f"{(start_sample + WINDOW_SAMPLES - 1) / FS:.3f}",
-            predicted, LABELS[predicted], *[f"{p:.6f}" for p in probabilities],
+            predicted, LABELS[predicted],
+            "" if true_label is None else true_label,
+            "" if true_label is None else LABELS[true_label],
+            "" if true_label is None else predicted == true_label,
+            *[f"{p:.6f}" for p in probabilities],
         ])
 
 
 def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
     eeg = load_causal_eeg(gdf_path)
+    trials = load_labeled_trials(gdf_path)
     model = joblib.load(model_path)
     max_start = eeg.shape[1] - WINDOW_SAMPLES
     if max_start < 0:
@@ -89,7 +129,7 @@ def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
     button_ax = fig.add_axes([0.83, 0.045, 0.12, 0.075])
     predict_button = Button(button_ax, "Predict")
 
-    state = {"start": 0}
+    state = {"start": 0, "true_label": None}
 
     def update_window(_value):
         start = int(round(slider.val * FS))
@@ -97,9 +137,9 @@ def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
         segment = eeg[:, start:start + WINDOW_SAMPLES]
         for i, line in enumerate(lines):
             line.set_ydata(segment[i] * 1e6 + offsets[i])
-        status.set_text(
-            f"Window: {start / FS:.2f}–{(start + WINDOW_SAMPLES - 1) / FS:.2f} s | Not predicted yet"
-        )
+        state["true_label"] = true_label_for_window(start, trials)
+        truth = LABELS[state["true_label"]] if state["true_label"] is not None else "Unavailable"
+        status.set_text(f"Window: {start / FS:.2f}–{(start + WINDOW_SAMPLES - 1) / FS:.2f} s | True: {truth} | Not predicted yet")
         fig.canvas.draw_idle()
 
     def predict(_event):
@@ -107,11 +147,17 @@ def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
         batch = eeg[np.newaxis, :, start:start + WINDOW_SAMPLES]
         pred = int(model.predict(batch)[0])
         probs = model.predict_proba(batch)[0]
+        true_label = state["true_label"]
+        if true_label is None:
+            verdict = "True label unavailable"
+        else:
+            verdict = "CORRECT" if pred == true_label else "INCORRECT"
+            verdict = f"True: {LABELS[true_label]} | {verdict}"
         status.set_text(
-            f"Prediction: {LABELS[pred]}  |  Left {probs[0]:.1%}  Right {probs[1]:.1%}  "
+            f"{verdict} | Predicted: {LABELS[pred]}  |  Left {probs[0]:.1%}  Right {probs[1]:.1%}  "
             f"Feet {probs[2]:.1%}  Tongue {probs[3]:.1%}"
         )
-        append_result(output_csv, start, pred, probs)
+        append_result(output_csv, start, pred, true_label, probs)
         fig.canvas.draw_idle()
 
     slider.on_changed(update_window)
@@ -123,7 +169,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gdf", type=Path, default=Path("data/A01T.gdf"))
     parser.add_argument("--model", type=Path, default=Path("bci2a_csp_lda_n6_all9.joblib"))
-    parser.add_argument("--output", type=Path, default=Path("outputs/realtime/manual_predictions.csv"))
+    parser.add_argument("--output", type=Path, default=Path("outputs/realtime/manual_predictions_with_correctness.csv"))
     args = parser.parse_args()
     show_window(args.gdf, args.model, args.output)
 

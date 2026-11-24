@@ -17,6 +17,12 @@ Figure_1.png
 
 # Trained models
 models/
+*.joblib
+
+# Local run outputs and review previews
+outputs/
+experiments/phase3/*_preview.png
+*.inspect.ndjson
 
 # Personal documents
 *.pdf

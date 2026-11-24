@@ -1,0 +1,10 @@
+﻿test_subject,n_test_trials,accuracy,macro_f1,cohen_kappa,model,epochs_run,normalization,protocol
+A01,288,0.3958333333333333,0.3945409761449085,0.19444444444444442,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A02,288,0.2777777777777778,0.18285664457621206,0.03703703703703709,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A03,288,0.4479166666666667,0.4268917477861759,0.26388888888888884,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A04,288,0.3506944444444444,0.25601960738056434,0.1342592592592593,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A05,288,0.2534722222222222,0.10750700280112045,0.00462962962962965,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A06,288,0.2881944444444444,0.25180842833412975,0.05092592592592593,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A07,288,0.2743055555555556,0.20852441937130053,0.03240740740740744,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A08,288,0.3541666666666667,0.30993371939167225,0.13888888888888884,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
+A09,288,0.3576388888888889,0.29368238375951855,0.1435185185185185,"EEGNet-8,2; Adam; early stopping",15,per-channel z-score; fit subjects only,LOSO; T session; 22 EEG channels; 8-30 Hz; cue+0.5 to +3.5 s
