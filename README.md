@@ -114,10 +114,18 @@ Add `--realtime` to pace playback at the recording sample rate. Results are writ
 
 ## Interactive manual window (吴润)
 
+组员可按[脑地形图与角色反馈窗口复现指南（Word）](docs/脑地形图与角色反馈窗口复现指南_吴润.docx)准备数据、生成演示模型并启动窗口。
+
 To move a fixed 3 s window by hand, launch:
 
 ```bash
 python -m src.realtime.interactive_window --gdf data/A01T.gdf --model bci2a_csp_lda_n6_all9.joblib
 ```
 
-Drag the slider to choose the window start time and press **预测**. The viewer plots all 22 channels for that window and shows the predicted class and class probabilities. Each manual prediction is appended to `outputs/realtime/manual_predictions.csv`. The model requires exactly 751 samples; the slider moves the window position but does not resize it. This interactive viewer is for offline inspection and is separate from the automatic replay command above.
+The viewer starts in trial mode when the GDF contains labeled trials. Drag **Trial** to choose one trial. The viewer displays its time in the recording and its true class. Each trial window covers 0.5 to 3.5 seconds after the cue. Press **Predict** to see the predicted class, class probabilities, and a large **CORRECT** or **INCORRECT** badge.
+
+Click **Mascot: Blueberry** to switch to Tomato and click again to switch back. Both characters come from Mindlog. After prediction, the character hops on a correct prediction and tilts on an incorrect one. Moving to another window clears the result and restores the idle pose.
+
+Select **Browse by time** to move the 3-second window along the full recording. Windows without a usable label show **Cannot score** after prediction. **Browse by trial** jumps to the nearest labeled trial. Files without class labels in their GDF open in time mode.
+
+The viewer plots all 22 channels. Each prediction is appended to `outputs/realtime/manual_predictions_with_correctness.csv`. Use this viewer to inspect saved recordings.

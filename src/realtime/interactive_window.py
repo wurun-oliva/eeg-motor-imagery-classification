@@ -1,7 +1,7 @@
 """Manually inspect one fixed-length EEG window and request a prediction.
 
-This is an interactive offline viewer. Drag the time slider to move the
-751-sample window, then click Predict. It does not alter the auto-replay path.
+Browse labeled trials or move a fixed 751-sample window along the recording,
+then click Predict.
 """
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ import numpy as np
 from matplotlib.widgets import Button, Slider
 from scipy.signal import sosfilt
 
-from src.realtime.realtime_filter_spec import FS, SOS, init_state
+from src.realtime.prediction_feedback import PredictionFeedback
+from src.realtime.realtime_filter_spec import FS, SAMPLES_PER_EPOCH, SOS, TMIN, init_state
 
 CHANNELS = [
     "EEG-Fz", "EEG-0", "EEG-1", "EEG-2", "EEG-3", "EEG-4", "EEG-5",
@@ -25,7 +26,8 @@ CHANNELS = [
     "EEG-10", "EEG-11", "EEG-12", "EEG-13", "EEG-14", "EEG-Pz", "EEG-15", "EEG-16",
 ]
 LABELS = {0: "Left hand", 1: "Right hand", 2: "Feet", 3: "Tongue"}
-WINDOW_SAMPLES = 751
+WINDOW_SAMPLES = SAMPLES_PER_EPOCH
+IMAGERY_END_SECONDS = 4.0
 
 
 def load_causal_eeg(gdf_path: Path) -> np.ndarray:
@@ -57,19 +59,25 @@ def load_labeled_trials(gdf_path: Path):
     starts.sort()
     cues.sort()
     trials = []
-    for i, (onset, next_onset) in enumerate(zip(starts, starts[1:] + [raw.n_times])):
+    for onset, next_onset in zip(starts, starts[1:] + [raw.n_times]):
         cue = next((item for item in cues if onset <= item[0] < next_onset), None)
         if cue is not None:
             trials.append((cue[0], next_onset, cue[1]))
     return trials
 
 
+def trial_start_bounds(cue_sample: int, next_onset: int) -> tuple[int, int]:
+    """Return the inclusive range of starts that keep the window inside the trial."""
+    first_start = cue_sample + round(TMIN * FS)
+    imagery_stop = min(next_onset, cue_sample + round(IMAGERY_END_SECONDS * FS) + 1)
+    return first_start, imagery_stop - WINDOW_SAMPLES
+
+
 def true_label_for_window(start_sample: int, trials):
     """Only score a full window inside the cue's four-second imagery period."""
-    stop_sample = start_sample + WINDOW_SAMPLES
     for cue_sample, next_onset, label in trials:
-        imagery_stop = min(next_onset, cue_sample + int(round(4.0 * FS)) + 1)
-        if start_sample >= cue_sample + int(round(0.5 * FS)) and stop_sample <= imagery_stop:
+        first_start, last_start = trial_start_bounds(cue_sample, next_onset)
+        if first_start <= start_sample <= last_start:
             return label
     return None
 
@@ -101,13 +109,19 @@ def append_result(path: Path, start_sample: int, predicted: int, true_label, pro
 def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
     eeg = load_causal_eeg(gdf_path)
     trials = load_labeled_trials(gdf_path)
-    model = joblib.load(model_path)
     max_start = eeg.shape[1] - WINDOW_SAMPLES
     if max_start < 0:
         raise ValueError("记录长度不足 751 个采样点，无法形成模型窗口")
+    model = joblib.load(model_path)
+
+    trial_windows = []
+    for cue_sample, next_onset, label in trials:
+        first_start, last_start = trial_start_bounds(cue_sample, next_onset)
+        if 0 <= first_start <= min(last_start, max_start):
+            trial_windows.append((first_start, label))
 
     fig, ax = plt.subplots(figsize=(13, 8))
-    plt.subplots_adjust(bottom=0.22)
+    plt.subplots_adjust(left=0.125, right=0.97, bottom=0.405)
     x = np.arange(WINDOW_SAMPLES) / FS
     offsets = np.arange(len(CHANNELS)) * 120.0
     lines = [
@@ -119,49 +133,95 @@ def show_window(gdf_path: Path, model_path: Path, output_csv: Path):
     ax.set_xlabel("Time within window (seconds)")
     ax.set_title("Manual EEG Window Viewer (fixed 3 s / 751 samples)")
     ax.grid(axis="x", alpha=0.25)
-    status = fig.text(0.12, 0.12, "Drag the slider to choose a window, then click Predict.", fontsize=11)
+    window_info = fig.text(0.125, 0.338, "", fontsize=11, color="#475569")
+    feedback = PredictionFeedback(fig)
 
-    slider_ax = fig.add_axes([0.14, 0.065, 0.66, 0.035])
-    slider = Slider(
-        slider_ax, "Window start (s)", 0.0, max_start / FS,
+    slider_position = [0.16, 0.066, 0.44, 0.033]
+    time_ax = fig.add_axes(slider_position)
+    time_slider = Slider(
+        time_ax, "Window start (s)", 0.0, max(1, max_start) / FS,
         valinit=0.0, valstep=1.0 / FS, valfmt="%.2f",
     )
-    button_ax = fig.add_axes([0.83, 0.045, 0.12, 0.075])
-    predict_button = Button(button_ax, "Predict")
+    trial_slider = None
+    mode_button = None
+    if trial_windows:
+        trial_ax = fig.add_axes(slider_position, label="trial slider")
+        trial_slider = Slider(
+            trial_ax, f"Trial (1–{len(trial_windows)})", 1, max(2, len(trial_windows)),
+            valinit=1, valstep=1, valfmt="%d",
+        )
+        mode_button = Button(fig.add_axes([0.66, 0.05, 0.12, 0.06]), "Browse by time",
+                             color="#ECF1F7", hovercolor="#DCE7F4")
+    mascot_button = Button(fig.add_axes([0.79, 0.05, 0.105, 0.06]), f"Mascot: {feedback.mascot}",
+                           color="#ECF1F7", hovercolor="#DCE7F4")
+    mascot_button.label.set_fontsize(9)
+    predict_button = Button(fig.add_axes([0.905, 0.05, 0.065, 0.06]), "Predict",
+                            color="#29446C", hovercolor="#345584")
+    predict_button.label.set_color("white")
+    predict_button.label.set_fontweight("bold")
 
-    state = {"start": 0, "true_label": None}
+    trial_mode = trial_slider is not None
+    start = 0
+    true_label = None
 
-    def update_window(_value):
-        start = int(round(slider.val * FS))
-        state["start"] = start
+    def update_window(_value=None):
+        nonlocal start, true_label
+        if trial_mode:
+            trial_number = int(trial_slider.val)
+            start, true_label = trial_windows[trial_number - 1]
+            position = f"Trial {trial_number} / {len(trial_windows)}"
+        else:
+            start = min(round(time_slider.val * FS), max_start)
+            true_label = true_label_for_window(start, trials)
+            position = "Time browsing"
+        end_seconds = (start + WINDOW_SAMPLES - 1) / FS
+        window_info.set_text(f"{position}   ·   Recording {start / FS:.2f}–{end_seconds:.2f} s")
         segment = eeg[:, start:start + WINDOW_SAMPLES]
-        for i, line in enumerate(lines):
-            line.set_ydata(segment[i] * 1e6 + offsets[i])
-        state["true_label"] = true_label_for_window(start, trials)
-        truth = LABELS[state["true_label"]] if state["true_label"] is not None else "Unavailable"
-        status.set_text(f"Window: {start / FS:.2f}–{(start + WINDOW_SAMPLES - 1) / FS:.2f} s | True: {truth} | Not predicted yet")
+        for line, channel, offset in zip(lines, segment, offsets):
+            line.set_ydata(channel * 1e6 + offset)
+        feedback.clear(LABELS.get(true_label))
         fig.canvas.draw_idle()
 
+    def show_active_slider():
+        time_ax.set_visible(not trial_mode)
+        time_slider.set_active(not trial_mode and max_start > 0)
+        if trial_slider is not None:
+            trial_slider.ax.set_visible(trial_mode)
+            trial_slider.set_active(trial_mode and len(trial_windows) > 1)
+            mode_button.label.set_text("Browse by time" if trial_mode else "Browse by trial")
+
+    def switch_mode(_event):
+        nonlocal trial_mode
+        trial_mode = not trial_mode
+        show_active_slider()
+        if trial_mode:
+            nearest_index = min(range(len(trial_windows)), key=lambda i: abs(trial_windows[i][0] - start))
+            trial_slider.set_val(nearest_index + 1)
+        else:
+            time_slider.set_val(start / FS)
+
     def predict(_event):
-        start = state["start"]
         batch = eeg[np.newaxis, :, start:start + WINDOW_SAMPLES]
         pred = int(model.predict(batch)[0])
         probs = model.predict_proba(batch)[0]
-        true_label = state["true_label"]
-        if true_label is None:
-            verdict = "True label unavailable"
-        else:
-            verdict = "CORRECT" if pred == true_label else "INCORRECT"
-            verdict = f"True: {LABELS[true_label]} | {verdict}"
-        status.set_text(
-            f"{verdict} | Predicted: {LABELS[pred]}  |  Left {probs[0]:.1%}  Right {probs[1]:.1%}  "
-            f"Feet {probs[2]:.1%}  Tongue {probs[3]:.1%}"
-        )
+        probabilities = "    ·    ".join(f"{name} {probs[label]:.1%}" for label, name in LABELS.items())
+        feedback.show_prediction(LABELS[pred], LABELS.get(true_label), probabilities)
         append_result(output_csv, start, pred, true_label, probs)
         fig.canvas.draw_idle()
 
-    slider.on_changed(update_window)
+    def change_mascot(_event):
+        feedback.change_mascot()
+        mascot_button.label.set_text(f"Mascot: {feedback.mascot}")
+        fig.canvas.draw_idle()
+
+    time_slider.on_changed(update_window)
+    if trial_slider is not None:
+        trial_slider.on_changed(update_window)
+        mode_button.on_clicked(switch_mode)
     predict_button.on_clicked(predict)
+    mascot_button.on_clicked(change_mascot)
+    show_active_slider()
+    update_window()
     plt.show()
 
 
