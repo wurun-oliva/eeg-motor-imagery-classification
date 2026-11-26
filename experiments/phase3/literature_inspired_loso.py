@@ -18,6 +18,7 @@ import torch
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import StratifiedShuffleSplit
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +29,22 @@ from shallowconvnet_loso import ShallowConvNet, euclidean_align_by_subject
 from eegnet_loso import EEGNet
 
 SUBJECTS = [f"A{i:02d}" for i in range(1, 10)]
+
+
+class FusedShallowConvNet(ShallowConvNet):
+    """Compose the consecutive linear convolutions to avoid a large intermediate."""
+
+    def forward(self, x):
+        temporal, spatial, batch_norm = self.features
+        # Retain both learned kernels and their factorization. There is no bias
+        # or nonlinearity between the temporal and spatial convolutions.
+        kernel = torch.einsum(
+            "oke,kt->oet", spatial.weight[:, :, :, 0], temporal.weight[:, 0, 0, :]
+        )
+        projected = F.conv1d(x[:, 0], kernel, padding=temporal.kernel_size[-1] // 2)
+        pooled = self.pool(batch_norm(projected.unsqueeze(2)).square())
+        features = self.dropout(torch.log(torch.clamp(pooled, min=1e-6)))
+        return self.classifier(features.flatten(1))
 
 
 class DeepConvNet(nn.Module):
@@ -74,11 +91,13 @@ def trial_normalize(x: np.ndarray):
     return ((x - mean) / std).astype(np.float32)
 
 
-def make_model(kind: str, n_channels: int, n_times: int):
+def make_model(kind: str, n_channels: int, n_times: int, *, fuse_shallow: bool = False):
     if kind == "deep":
         return DeepConvNet(n_channels, n_times)
     if kind == "eegnet":
         return EEGNet(n_channels, n_times)
+    if fuse_shallow:
+        return FusedShallowConvNet(n_channels, n_times)
     return ShallowConvNet(n_channels, n_times)
 
 
@@ -144,18 +163,29 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--paper-preprocess", action="store_true",
                         help="Use acquired 0.5-100 Hz data at 250 Hz and per-trial Z-score")
+    parser.add_argument("--band", type=float, nargs=2, metavar=("LOW", "HIGH"),
+                        help="Bandpass cutoffs in Hz for the 125 Hz pipeline (default: 4 38)")
+    parser.add_argument("--fuse-shallow", action="store_true",
+                        help="Compose the two ShallowConvNet convolutions for faster training")
     parser.add_argument("--inner-split", choices=["subject", "random"], default="subject")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.fuse_shallow and args.model != "shallow":
+        parser.error("--fuse-shallow requires --model shallow")
+    if args.paper_preprocess and args.band is not None:
+        parser.error("--band cannot be combined with --paper-preprocess")
+    low, high = args.band if args.band is not None else (4.0, 38.0)
+    if not 0 < low < high < 62.5:
+        parser.error("--band requires 0 < LOW < HIGH < 62.5 Hz")
     torch.set_num_threads(2)
     device = ("cuda" if torch.cuda.is_available() else
               "mps" if torch.backends.mps.is_available() else "cpu") if args.device == "auto" else args.device
     print(f"Training device: {device}", flush=True)
     x, y, ids, sessions = load_sessions(
         ROOT / "data", ROOT / "data/true_labels.zip", sessions=args.sessions,
-        l_freq=None if args.paper_preprocess else 4.0,
-        h_freq=None if args.paper_preprocess else 38.0,
+        l_freq=None if args.paper_preprocess else low,
+        h_freq=None if args.paper_preprocess else high,
         decim=1 if args.paper_preprocess else 2,
     )
     if args.ea:
@@ -167,6 +197,10 @@ def main():
         suffix += "_randomval" if args.inner_split == "random" else ""
         suffix += "_ea" if args.ea else ""
         suffix += "_sr" if args.augment else ""
+        if (low, high) != (4.0, 38.0):
+            suffix += f"_band_{low:g}-{high:g}hz"
+        if args.fuse_shallow:
+            suffix += f"_fused_{device}"
         args.out = ROOT / "experiments/phase3" / f"{args.model}_{args.sessions}_4s{suffix}_loso.csv"
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -186,14 +220,15 @@ def main():
             inner_train, inner_val = source[train_rel], source[val_rel]
         set_seed(args.seed + fold * 100)
         inner_x = x if args.paper_preprocess else source_normalize(x, inner_train)
-        inner_model = make_model(args.model, x.shape[1], x.shape[2])
+        inner_model = make_model(args.model, x.shape[1], x.shape[2], fuse_shallow=args.fuse_shallow)
         best_epoch = train_epochs(inner_model, inner_x[inner_train], y[inner_train],
                                   args.max_epochs, augment=args.augment, device=device,
                                   val=(inner_x[inner_val], y[inner_val]))
+        print(f"{held_out}: validation selected {best_epoch} epochs; refitting", flush=True)
         del inner_model, inner_x
         set_seed(args.seed + fold * 100 + 1)
         outer_x = x if args.paper_preprocess else source_normalize(x, source)
-        model = make_model(args.model, x.shape[1], x.shape[2])
+        model = make_model(args.model, x.shape[1], x.shape[2], fuse_shallow=args.fuse_shallow)
         train_epochs(model, outer_x[source], y[source], best_epoch,
                      augment=args.augment, device=device)
         model.eval()
@@ -214,8 +249,9 @@ def main():
                 "protocol": (
                     f"LOSO; {args.inner_split} inner validation; cue+0 to +4 s; "
                     + ("acquired 0.5-100 Hz; 250 Hz; trial zscore" if args.paper_preprocess
-                       else "4-38 Hz; 125 Hz; source-only channel zscore")
+                       else f"{low:g}-{high:g} Hz; 125 Hz; source-only channel zscore")
                     + ("; unlabeled target EA" if args.ea else "")
+                    + (f"; fused shallow convolution; {device}" if args.fuse_shallow else "")
                 ),
             })
         with args.out.open("w", newline="", encoding="utf-8-sig") as handle:

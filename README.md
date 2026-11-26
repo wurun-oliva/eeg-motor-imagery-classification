@@ -39,6 +39,12 @@ CSP maximizes the variance of one class while minimizing it for others, making i
 - **Random baseline**: 25% (4-class)
 - **Confusion matrix**: See `confusion_matrix.png`
 
+### 深度学习频段对照（吴润）
+
+BCI IV-2a 的 T+E 数据采用 ShallowConvNet + 欧氏对齐，固定训练设置，对五个频段做九人留一测试。**2–38 Hz 在本轮平均准确率最高，为 56.58%，Macro-F1 为 54.15%。** 相比同一环境下的 4–38 Hz 基线（53.55%），平均提高 3.03 个百分点，9 人中有 8 人提高。本轮使用一个随机种子。
+
+[五组结果、逐人 CSV 和复现命令](experiments/phase3/README.md#frequency-band-sweep)
+
 ## Installation
 
 ```bash

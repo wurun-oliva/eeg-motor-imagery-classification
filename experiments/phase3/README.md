@@ -18,6 +18,43 @@ python experiments/phase3/literature_inspired_loso.py --model deep --sessions TE
 
 每次试验按整名受试者留出，输出 CSV 包含九人逐人准确率和 T/E 分开准确率。`--ea` 使用目标受试者全部无标签试次，属于测试时适配。`--inner-split random` 仅在来源受试者的试次中随机划出验证集，不使用留出受试者标签。论文对照和数据检查见[跨被试文献与复核记录](./跨被试文献与复核记录.md)。深层网络的完整九折 250 Hz 运行需较长计算时间；未完成的运行不计为成绩。
 
+<a name="frequency-band-sweep"></a>
+
+### T+E ShallowConvNet 的 4–38 Hz 邻近频段对照
+
+固定九人留一划分、提示后 0–4 秒、125 Hz、EA、来源训练集片段重组、来源试次验证、训练上限 30 轮和随机种子 42。每组独立训练与测试，只改变带通滤波范围。用于早停的验证流程相同，所选轮数可以随信号而变。
+
+以 4–38 Hz 为基线，分别改变下限（2、6 Hz）或上限（34、42 Hz）。各组均使用同一台 Apple Silicon Mac 的 PyTorch MPS 后端。为减少中间张量，将连续的线性时域卷积与空间卷积合成一次计算，保留两组可训练权重。对照以本次同环境重跑的 4–38 Hz 为基线。
+
+实验环境使用 Python 3.12.14、PyTorch 2.15.0、MNE 1.13.2、NumPy 2.5.5、SciPy 1.18.1 和 scikit-learn 1.9.1。复现生成的 CSV 保存在 `outputs/phase3/`。
+
+```bash
+conda activate eeg-dl
+for band in 4:38 2:38 6:38 4:34 4:42; do
+  low=${band%:*}
+  high=${band#*:}
+  OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 VECLIB_MAXIMUM_THREADS=2 \
+    PYTORCH_ENABLE_MPS_FALLBACK=1 \
+    python experiments/phase3/literature_inspired_loso.py --model shallow --sessions TE \
+    --ea --augment --inner-split random --max-epochs 30 --seed 42 --device mps --fuse-shallow \
+    --band "$low" "$high" --out "outputs/phase3/shallow_TE_4s_band_${low}-${high}_hz.csv"
+done
+```
+
+每组用 CSV 中的 `test_session=all` 行与基线按受试者配对，每人 576 个试次。先计算每名受试者的准确率差，再计算九人的平均差。
+
+| 频段及逐人结果 | 平均准确率 | 平均 Macro-F1 | 较基线（百分点） | 准确率高于基线 |
+|---|---:|---:|---:|---:|
+| [4–38 Hz](./shallow_TE_4s_band_4-38_hz.csv) | 53.55% | 51.29% | 0.00 | — |
+| [2–38 Hz](./shallow_TE_4s_band_2-38_hz.csv) | **56.58%** | 54.15% | +3.03 | 8/9 |
+| [6–38 Hz](./shallow_TE_4s_band_6-38_hz.csv) | 52.16% | 49.76% | -1.39 | 2/9 |
+| [4–34 Hz](./shallow_TE_4s_band_4-34_hz.csv) | 53.70% | 51.51% | +0.15 | 3/9 |
+| [4–42 Hz](./shallow_TE_4s_band_4-42_hz.csv) | 53.74% | 51.50% | +0.19 | 4/9 |
+
+本轮五个候选频段中，2–38 Hz 准确率最高。历史 4–38 Hz 运行记录为 54.59%，本表各组差值均使用同一环境重跑的 4–38 Hz（53.55%）。本轮使用一个随机种子和同一批九名受试者，频段排名属于探索性结果。
+
+### 其他实验
+
 在仓库根目录打开终端，先进入已安装依赖的环境，再运行实验：
 
 ```bash
@@ -61,9 +98,9 @@ python experiments/phase3/normalization_loso.py
 
 ## 实验口径和限制
 
-- 数据为 BCI Competition IV 2a 的 A01–A09 标注 T session，22 个 EEG 通道；每人 288 个试次。
+- T 数据实验使用 BCI Competition IV 2a 的 A01–A09，22 个 EEG 通道，每人 288 个试次。T+E 实验合并两次采集，每人 576 个试次。
 - 每轮留出 1 名受试者测试，其余 8 名训练。EEGNet 还从这 8 人中留出验证集，仅用于早停。
-- 分类窗口为类别提示后 0.5–3.5 秒。该窗口是运动想象期，不包括独立标注的静息态；提示前片段属于注视/期待阶段，不应称为静息态。
+- T 数据基线的分类窗口为类别提示后 0.5–3.5 秒，T+E 频段对照使用提示后 0–4 秒。提示前片段属于注视或期待阶段，数据集中没有独立标注的静息类。
 - 所有模型实验使用离线零相位滤波。结果不能证明真实设备在线采集能力或实时延迟。
 - 头地形图以提示前注视/期待片段作相对功率参考，不是静息态图。地形图是群体均值，不是单个受试者的诊断结论。
 - `src/realtime/interactive_window.py` 是对已录制 GDF 的手动窗口查看器；滑动选择窗口后点击 Predict。仅当窗口处于有标签的运动想象试次中才显示正确/错误，否则真实标签不可用。这是离线交互演示，不是连续实时解码。
